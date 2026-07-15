@@ -162,6 +162,11 @@ def parse_args():
         help="Color for gridlines, coastlines, and borders (default: auto)",
     )
     parser.add_argument(
+        "--hide-annotations",
+        action="store_true",
+        help="Hide face numbers, arrows, and u/v labels",
+    )
+    parser.add_argument(
         "--output",
         help="Optional path for saving the figure instead of showing it",
     )
@@ -466,7 +471,20 @@ def sample_earth_image(earth_source, face_lons, face_lats):
     return sample_plain_earth_image(normalize_raster_image(earth_source), face_lons, face_lats)
 
 
-def draw_face_background(ax, square_x, square_y, face_lons, face_lats, face_field, cmap, background):
+def build_data_norm(face_field):
+    finite_values = face_field[np.isfinite(face_field)]
+    if finite_values.size == 0:
+        return mcolors.Normalize(vmin=0.0, vmax=1.0)
+
+    vmin = float(np.min(finite_values))
+    vmax = float(np.max(finite_values))
+    if np.isclose(vmin, vmax):
+        vmax = vmin + 1.0
+
+    return mcolors.Normalize(vmin=vmin, vmax=vmax)
+
+
+def draw_face_background(ax, square_x, square_y, face_lons, face_lats, face_field, cmap, background, data_norm=None):
     if background == "data":
         ax.pcolormesh(
             square_x,
@@ -474,6 +492,7 @@ def draw_face_background(ax, square_x, square_y, face_lons, face_lats, face_fiel
             face_field,
             shading="auto",
             cmap=cmap,
+            norm=data_norm,
         )
         return
 
@@ -591,33 +610,29 @@ def get_overlay_color(background, canvas, earth_image_path, overlay_color):
     return "white" if canvas in {"black", "transparent"} else "black"
 
 
-def get_face_luminance(face_background, background, cmap):
+def get_face_luminance(face_background, background, cmap, data_norm=None):
     if background == "earth":
         rgb = normalize_raster_image(face_background)[..., :3]
     else:
         finite_values = face_background[np.isfinite(face_background)]
         if finite_values.size == 0:
             return 1.0
-        vmin = float(np.min(finite_values))
-        vmax = float(np.max(finite_values))
-        if np.isclose(vmin, vmax):
-            normed = np.full(face_background.shape, 0.5)
-        else:
-            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-            normed = norm(face_background)
+        if data_norm is None:
+            data_norm = build_data_norm(face_background)
+        normed = data_norm(face_background)
         rgb = plt.get_cmap(cmap)(normed)[..., :3]
 
     return float(np.nanmean(0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]))
 
 
-def get_annotation_color(face_background, background, canvas, earth_image_path, cmap, annotation_color):
+def get_annotation_color(face_background, background, canvas, earth_image_path, cmap, annotation_color, data_norm=None):
     if annotation_color != "auto":
         return annotation_color
     if background == "earth":
         return "white"
     if canvas in {"black", "transparent"}:
         return "white"
-    return "white" if get_face_luminance(face_background, background, cmap) < 0.45 else "black"
+    return "white" if get_face_luminance(face_background, background, cmap, data_norm=data_norm) < 0.45 else "black"
 
 
 def get_figure_facecolor(canvas):
@@ -712,6 +727,7 @@ def plot_cube_net(
     canvas="white",
     annotation_color="auto",
     overlay_color="auto",
+    hide_annotations=False,
 ):
     raw = open_dataset_quietly(dataset_path)
     face_field = None
@@ -740,12 +756,15 @@ def plot_cube_net(
     coastlines = list(shpreader.Reader(coastline_path).geometries())
     borders = list(shpreader.Reader(border_path).geometries())
     earth_source = None
+    data_norm = None
     if background == "earth":
         earth_source = (
             load_earth_raster(earth_image_path)
             if earth_image_path is not None
             else load_earth_image()
         )
+    else:
+        data_norm = build_data_norm(face_field)
 
     figure_facecolor = get_figure_facecolor(canvas)
     overlay_color = get_overlay_color(background, canvas, earth_image_path, overlay_color)
@@ -781,6 +800,7 @@ def plot_cube_net(
             earth_image_path,
             cmap,
             annotation_color,
+            data_norm=data_norm,
         )
 
         draw_face_background(
@@ -792,6 +812,7 @@ def plot_cube_net(
             face_background,
             cmap,
             background,
+            data_norm=data_norm,
         )
 
         for row in range(square_x.shape[0]):
@@ -848,16 +869,30 @@ def plot_cube_net(
         ax.set_aspect("equal")
         ax.axis("off")
 
-        ax.text(
-            0.08,
-            0.88,
-            str(face),
-            transform=ax.transAxes,
-            color=face_annotation_color,
-            fontsize=28,
-            weight="bold",
-        )
-        draw_uv_axes(ax, face_rotations[face], face_annotation_color)
+        if not hide_annotations:
+            ax.text(
+                0.08,
+                0.88,
+                str(face),
+                transform=ax.transAxes,
+                color=face_annotation_color,
+                fontsize=28,
+                weight="bold",
+            )
+            draw_uv_axes(ax, face_rotations[face], face_annotation_color)
+
+    if background == "data" and data_norm is not None:
+        colorbar_axis = fig.add_axes([0.62, 0.08, 0.26, 0.025])
+        scalar_mappable = plt.cm.ScalarMappable(norm=data_norm, cmap=plt.get_cmap(cmap))
+        scalar_mappable.set_array([])
+        colorbar = fig.colorbar(scalar_mappable, cax=colorbar_axis, orientation="horizontal")
+        colorbar.set_label(variable_name or "value")
+
+        tick_color = "white" if canvas in {"black", "transparent"} else "black"
+        colorbar.ax.xaxis.label.set_color(tick_color)
+        colorbar.ax.tick_params(colors=tick_color)
+        for spine in colorbar.ax.spines.values():
+            spine.set_edgecolor(tick_color)
 
     raw.close()
     return fig
@@ -876,6 +911,7 @@ def main():
         canvas=args.canvas,
         annotation_color=args.annotation_color,
         overlay_color=args.overlay_color,
+        hide_annotations=args.hide_annotations,
     )
 
     if args.output:

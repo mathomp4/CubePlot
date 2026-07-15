@@ -13,6 +13,9 @@ Features:
 - automatic Blue Marble download via `--earth-image blue-marble`
 - configurable figure background, annotation color, and overlay color
 - auto-contrast face labels, arrows, and `u/v` labels for dark data fields
+- shared normalization across all faces in `data` mode
+- automatic horizontal colorbar for `data` mode
+- optional `--hide-annotations` toggle for face numbers, arrows, and `u/v` labels
 - portable `uv` script metadata at the top of the file
 
 ## Quick start
@@ -50,6 +53,8 @@ Run with a data field instead:
 uv run plot_cube_net.py c24.nc4 --background data --variable SLP
 ```
 
+`data` mode uses one shared color scale across all faces and adds a horizontal colorbar automatically.
+
 For dark fields such as `PHIS`, you can either use the default auto-contrast annotations or force white styling explicitly:
 
 ```bash
@@ -62,6 +67,12 @@ Use a different colormap or time/level selection:
 ```bash
 uv run plot_cube_net.py c24.nc4 --background data --variable T --level-index 10 --cmap viridis
 uv run plot_cube_net.py c24.nc4 --background data --variable PS --time-index 0
+```
+
+Hide the face labels and `u/v` annotations while keeping the colorbar:
+
+```bash
+uv run plot_cube_net.py c24.nc4 --background data --variable T2M --hide-annotations --output t2m.png
 ```
 
 Save to a file:
@@ -104,6 +115,9 @@ dataset
 --overlay-color {auto,black,white}
     Color for gridlines, coastlines, and borders. Default: `auto`.
 
+--hide-annotations
+    Hide face numbers, arrows, and `u/v` labels.
+
 --output OUTPUT
     Optional output image path.
 ```
@@ -116,5 +130,6 @@ dataset
 
 - External rasters are assumed to be global equirectangular Earth images.
 - Georeferenced rasters currently need to use `EPSG:4326`.
+- `data` mode adds a shared horizontal colorbar labeled with the plotted variable name.
 - The script suppresses the recurring xarray duplicate-dimension warning emitted when opening some cubed-sphere datasets.
 - `*.nc4` files are gitignored in this repo.
