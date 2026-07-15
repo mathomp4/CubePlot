@@ -142,6 +142,12 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--canvas",
+        choices=("white", "black", "transparent"),
+        default="white",
+        help="Figure background color (default: white)",
+    )
+    parser.add_argument(
         "--output",
         help="Optional path for saving the figure instead of showing it",
     )
@@ -548,7 +554,35 @@ def transform_line_to_square(coords, projection, origin, inverse_basis, face_cen
     return segments
 
 
-def draw_uv_axes(ax, display_transform):
+def use_dark_earth_styling(background, earth_image_path):
+    return background == "earth" and earth_image_path == "blue-marble"
+
+
+def get_annotation_color(background, canvas, earth_image_path):
+    if use_dark_earth_styling(background, earth_image_path):
+        return "white"
+    return "white" if canvas in {"black", "transparent"} else "black"
+
+
+def get_uv_color(background, canvas):
+    if background == "earth":
+        return "white"
+    return "white" if canvas in {"black", "transparent"} else "black"
+
+
+def get_overlay_color(background, canvas, earth_image_path):
+    if use_dark_earth_styling(background, earth_image_path):
+        return "white"
+    return "white" if canvas in {"black", "transparent"} else "black"
+
+
+def get_figure_facecolor(canvas):
+    if canvas == "transparent":
+        return "none"
+    return canvas
+
+
+def draw_uv_axes(ax, display_transform, annotation_color):
     origin_x, origin_y = apply_display_transform(
         BASE_ARROW_ORIGIN[0],
         BASE_ARROW_ORIGIN[1],
@@ -573,32 +607,50 @@ def draw_uv_axes(ax, display_transform):
         xy=(origin[0] + u_vector[0], origin[1] + u_vector[1]),
         xytext=origin,
         xycoords="axes fraction",
-        arrowprops=dict(color="white", width=1.5, headwidth=10, headlength=10),
+        arrowprops=dict(color=annotation_color, width=1.5, headwidth=10, headlength=10),
     )
     ax.annotate(
         "",
         xy=(origin[0] + v_vector[0], origin[1] + v_vector[1]),
         xytext=origin,
         xycoords="axes fraction",
-        arrowprops=dict(color="white", width=1.5, headwidth=10, headlength=10),
+        arrowprops=dict(color=annotation_color, width=1.5, headwidth=10, headlength=10),
     )
 
-    ax.text(
-        origin[0] + u_vector[0] * 1.05,
-        origin[1] + u_vector[1] * 1.05,
+    def label_offset(vector):
+        direction = np.array(vector, dtype=float)
+        magnitude = np.hypot(direction[0], direction[1])
+        if magnitude == 0.0:
+            return (0.0, 0.0)
+
+        direction /= magnitude
+        perpendicular = np.array([-direction[1], direction[0]])
+        offset = 8.0 * direction + 6.0 * perpendicular
+        return float(offset[0]), float(offset[1])
+
+    u_tip = (origin[0] + u_vector[0], origin[1] + u_vector[1])
+    v_tip = (origin[0] + v_vector[0], origin[1] + v_vector[1])
+    u_offset = label_offset(u_vector)
+    v_offset = label_offset(v_vector)
+
+    ax.annotate(
         "u",
-        transform=ax.transAxes,
-        color="white",
+        xy=u_tip,
+        xytext=u_offset,
+        xycoords="axes fraction",
+        textcoords="offset points",
+        color=annotation_color,
         fontsize=18,
         fontstyle="italic",
         weight="bold",
     )
-    ax.text(
-        origin[0] + v_vector[0] * 1.05,
-        origin[1] + v_vector[1] * 1.05,
+    ax.annotate(
         "v",
-        transform=ax.transAxes,
-        color="white",
+        xy=v_tip,
+        xytext=v_offset,
+        xycoords="axes fraction",
+        textcoords="offset points",
+        color=annotation_color,
         fontsize=18,
         fontstyle="italic",
         weight="bold",
@@ -613,6 +665,7 @@ def plot_cube_net(
     cmap="turbo",
     background="earth",
     earth_image_path=None,
+    canvas="white",
 ):
     raw = xr.open_dataset(dataset_path)
     face_field = None
@@ -633,7 +686,13 @@ def plot_cube_net(
         category="physical",
         name="coastline",
     )
+    border_path = shpreader.natural_earth(
+        resolution="110m",
+        category="cultural",
+        name="admin_0_boundary_lines_land",
+    )
     coastlines = list(shpreader.Reader(coastline_path).geometries())
+    borders = list(shpreader.Reader(border_path).geometries())
     earth_source = None
     if background == "earth":
         earth_source = (
@@ -642,7 +701,13 @@ def plot_cube_net(
             else load_earth_image()
         )
 
-    fig = plt.figure(figsize=(16, 12), facecolor="black")
+    figure_facecolor = get_figure_facecolor(canvas)
+    annotation_color = get_annotation_color(background, canvas, earth_image_path)
+    overlay_color = get_overlay_color(background, canvas, earth_image_path)
+    uv_color = get_uv_color(background, canvas)
+    axes_facecolor = "none" if canvas == "transparent" else figure_facecolor
+
+    fig = plt.figure(figsize=(16, 12), facecolor=figure_facecolor)
 
     for face, net_position in sorted(face_positions.items(), key=lambda item: (item[1][1], item[1][0])):
         position = NET_AXES_POSITIONS[net_position]
@@ -654,7 +719,7 @@ def plot_cube_net(
             face_center,
             plate_carree,
         )
-        ax = fig.add_axes(position, facecolor="black")
+        ax = fig.add_axes(position, facecolor=axes_facecolor)
         square_x, square_y = apply_display_transform(square_x, square_y, face_rotations[face])
         if background == "data":
             face_background = face_field[face_index]
@@ -680,14 +745,14 @@ def plot_cube_net(
             ax.plot(
                 square_x[row, :],
                 square_y[row, :],
-                color="black",
+                color=overlay_color,
                 linewidth=0.35,
             )
         for col in range(square_x.shape[1]):
             ax.plot(
                 square_x[:, col],
                 square_y[:, col],
-                color="black",
+                color=overlay_color,
                 linewidth=0.35,
             )
 
@@ -706,7 +771,24 @@ def plot_cube_net(
                         segment[:, 1],
                         face_rotations[face],
                     )
-                    ax.plot(segment_x, segment_y, color="black", linewidth=0.6)
+                    ax.plot(segment_x, segment_y, color=overlay_color, linewidth=0.6)
+
+        for border in borders:
+            for coords in extract_lines(border):
+                for segment in transform_line_to_square(
+                    coords,
+                    projection,
+                    origin,
+                    inverse_basis,
+                    face_center,
+                    plate_carree,
+                ):
+                    segment_x, segment_y = apply_display_transform(
+                        segment[:, 0],
+                        segment[:, 1],
+                        face_rotations[face],
+                    )
+                    ax.plot(segment_x, segment_y, color=overlay_color, linewidth=0.35, alpha=0.9)
 
         ax.set_xlim(0.0, 1.0)
         ax.set_ylim(0.0, 1.0)
@@ -718,11 +800,11 @@ def plot_cube_net(
             0.88,
             str(face),
             transform=ax.transAxes,
-            color="white",
+            color=annotation_color,
             fontsize=28,
             weight="bold",
         )
-        draw_uv_axes(ax, face_rotations[face])
+        draw_uv_axes(ax, face_rotations[face], uv_color)
 
     raw.close()
     return fig
@@ -738,10 +820,16 @@ def main():
         cmap=args.cmap,
         background=args.background,
         earth_image_path=args.earth_image,
+        canvas=args.canvas,
     )
 
     if args.output:
-        fig.savefig(args.output, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight")
+        save_kwargs = dict(dpi=150, bbox_inches="tight")
+        if args.canvas == "transparent":
+            save_kwargs["transparent"] = True
+        else:
+            save_kwargs["facecolor"] = fig.get_facecolor()
+        fig.savefig(args.output, **save_kwargs)
     else:
         plt.show()
 

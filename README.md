@@ -20,6 +20,13 @@ Run with the built-in Earth background:
 uv run plot_cube_net.py c24.nc4 --background earth
 ```
 
+The figure canvas defaults to white. You can also use:
+
+```bash
+uv run plot_cube_net.py c24.nc4 --background earth --canvas black
+uv run plot_cube_net.py c24.nc4 --background earth --canvas transparent --output cube_plot.png
+```
+
 Run with the built-in Blue Marble helper:
 
 ```bash
