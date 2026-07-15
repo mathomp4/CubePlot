@@ -14,12 +14,14 @@
 import argparse
 from pathlib import Path
 from urllib.request import urlretrieve
+import warnings
 
 import cartopy
 import cartopy.crs as ccrs
 import cartopy.io.shapereader as shpreader
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 import rasterio
 import xarray as xr
@@ -146,6 +148,18 @@ def parse_args():
         choices=("white", "black", "transparent"),
         default="white",
         help="Figure background color (default: white)",
+    )
+    parser.add_argument(
+        "--annotation-color",
+        choices=("auto", "black", "white"),
+        default="auto",
+        help="Color for face labels, arrows, and u/v letters (default: auto)",
+    )
+    parser.add_argument(
+        "--overlay-color",
+        choices=("auto", "black", "white"),
+        default="auto",
+        help="Color for gridlines, coastlines, and borders (default: auto)",
     )
     parser.add_argument(
         "--output",
@@ -316,6 +330,17 @@ def select_face_field(raw, variable_name, time_index, level_index):
         )
 
     return field.values
+
+
+def open_dataset_quietly(dataset_path):
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Duplicate dimension names present: dimensions .*",
+            category=UserWarning,
+            module=r"xarray\.namedarray\.core",
+        )
+        return xr.open_dataset(dataset_path)
 
 
 def load_earth_image():
@@ -558,22 +583,41 @@ def use_dark_earth_styling(background, earth_image_path):
     return background == "earth" and earth_image_path == "blue-marble"
 
 
-def get_annotation_color(background, canvas, earth_image_path):
+def get_overlay_color(background, canvas, earth_image_path, overlay_color):
+    if overlay_color != "auto":
+        return overlay_color
     if use_dark_earth_styling(background, earth_image_path):
         return "white"
     return "white" if canvas in {"black", "transparent"} else "black"
 
 
-def get_uv_color(background, canvas):
+def get_face_luminance(face_background, background, cmap):
+    if background == "earth":
+        rgb = normalize_raster_image(face_background)[..., :3]
+    else:
+        finite_values = face_background[np.isfinite(face_background)]
+        if finite_values.size == 0:
+            return 1.0
+        vmin = float(np.min(finite_values))
+        vmax = float(np.max(finite_values))
+        if np.isclose(vmin, vmax):
+            normed = np.full(face_background.shape, 0.5)
+        else:
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+            normed = norm(face_background)
+        rgb = plt.get_cmap(cmap)(normed)[..., :3]
+
+    return float(np.nanmean(0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]))
+
+
+def get_annotation_color(face_background, background, canvas, earth_image_path, cmap, annotation_color):
+    if annotation_color != "auto":
+        return annotation_color
     if background == "earth":
         return "white"
-    return "white" if canvas in {"black", "transparent"} else "black"
-
-
-def get_overlay_color(background, canvas, earth_image_path):
-    if use_dark_earth_styling(background, earth_image_path):
+    if canvas in {"black", "transparent"}:
         return "white"
-    return "white" if canvas in {"black", "transparent"} else "black"
+    return "white" if get_face_luminance(face_background, background, cmap) < 0.45 else "black"
 
 
 def get_figure_facecolor(canvas):
@@ -666,8 +710,10 @@ def plot_cube_net(
     background="earth",
     earth_image_path=None,
     canvas="white",
+    annotation_color="auto",
+    overlay_color="auto",
 ):
-    raw = xr.open_dataset(dataset_path)
+    raw = open_dataset_quietly(dataset_path)
     face_field = None
     if background == "data":
         if variable_name is None:
@@ -702,9 +748,7 @@ def plot_cube_net(
         )
 
     figure_facecolor = get_figure_facecolor(canvas)
-    annotation_color = get_annotation_color(background, canvas, earth_image_path)
-    overlay_color = get_overlay_color(background, canvas, earth_image_path)
-    uv_color = get_uv_color(background, canvas)
+    overlay_color = get_overlay_color(background, canvas, earth_image_path, overlay_color)
     axes_facecolor = "none" if canvas == "transparent" else figure_facecolor
 
     fig = plt.figure(figsize=(16, 12), facecolor=figure_facecolor)
@@ -729,6 +773,15 @@ def plot_cube_net(
                 face_lons[face_index],
                 face_lats[face_index],
             )
+
+        face_annotation_color = get_annotation_color(
+            face_background,
+            background,
+            canvas,
+            earth_image_path,
+            cmap,
+            annotation_color,
+        )
 
         draw_face_background(
             ax,
@@ -800,11 +853,11 @@ def plot_cube_net(
             0.88,
             str(face),
             transform=ax.transAxes,
-            color=annotation_color,
+            color=face_annotation_color,
             fontsize=28,
             weight="bold",
         )
-        draw_uv_axes(ax, face_rotations[face], uv_color)
+        draw_uv_axes(ax, face_rotations[face], face_annotation_color)
 
     raw.close()
     return fig
@@ -821,6 +874,8 @@ def main():
         background=args.background,
         earth_image_path=args.earth_image,
         canvas=args.canvas,
+        annotation_color=args.annotation_color,
+        overlay_color=args.overlay_color,
     )
 
     if args.output:
